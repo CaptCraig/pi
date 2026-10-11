@@ -1,0 +1,724 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="description" content="Seven animated ways to discover pi, from a rolling wheel to dropped toothpicks.">
+<title>Seven Ways to Pi</title>
+<!--
+  Seven Ways to Pi: one self-contained page. No build step, no libraries.
+
+  Map of this file
+    <style>   Colour and font tokens on :root (light), repeated for dark. Everything else styles from those tokens.
+    <body>    Header, method strip (#strip), stage (title, canvas #cv, digit readout), controls.
+    <script>  1. helpers and shared drawing (line, txt, stick, bracket, poly, split, chart)
+              2. the methods: each is one M.push({...}) block
+              3. the shell: thumbnails, readout, controls, animation loop
+
+  To add a method, push one more object onto M with these members:
+    id, title, watch        short id, strip title, one-sentence prompt
+    extra                   {type:'range',label,min,max,step,fmt?} or {type:'button',label} or null
+    make()                  fresh state            thumb()      state shown in the thumbnail
+    tick(s, dt)             advance; return false when finished
+    step(s)                 one step forward       rewind(s)    back to the start for a replay
+    done(s)                 true when finished
+    read(s)                 {prefix, value, note} for the digit tiles; digits light up when prefix is 'π ≈'
+    draw(ctx, w, h, s, o)   draw into a w × h area; o.thumb is true for the thumbnail (skip the labels)
+    getExtra/setExtra       for a range control    extraAction(s)  for a button control
+
+  The only outside reference is the Google Fonts <link> below. Delete it and the page
+  falls back to system fonts and runs fully offline.
+-->
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=Fredoka:wght@400;500;600&display=swap">
+<style>
+/* Base rules a bare page needs (a hosted viewer normally supplies these). */
+:root{color-scheme:light;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+body{margin:0}
+[hidden]{display:none!important}
+
+/* Layout: one-screen workbench on graph paper. Method strip on top, stage in the middle, digit tiles and controls below. */
+:root{
+  --paper:#EDF2F8; --surface:#FFFFFF; --ink:#16223A; --ink-soft:#56657E; --rule:#C5D1E0; --grid:#DCE5F0;
+  --accent:#2453D4; --on-accent:#FFFFFF; --lit:#FFC83A; --lit-edge:#C98F00; --on-lit:#16223A;
+  --c-red:#E0463B; --c-yellow:#EFA211; --c-teal:#0C998A; --c-blue:#2E6AE8; --c-violet:#8650E0; --c-crust:#B5702B;
+  --font-display:'Fredoka','Trebuchet MS','Segoe UI',sans-serif;
+  --font-body:'Atkinson Hyperlegible','Segoe UI',system-ui,sans-serif;
+  --radius:14px;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --paper:#101A25; --surface:#1A2836; --ink:#EAF0F7; --ink-soft:#9DB0C5; --rule:#374B5F; --grid:#1B2A39;
+    --accent:#86A8FF; --on-accent:#0E1722; --lit:#FFC83A; --lit-edge:#FFE08A; --on-lit:#16223A;
+    --c-red:#FF6F61; --c-yellow:#FFC04A; --c-teal:#35C9B4; --c-blue:#6C9BFF; --c-violet:#B08CFF; --c-crust:#D0914A;
+    color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --paper:#101A25; --surface:#1A2836; --ink:#EAF0F7; --ink-soft:#9DB0C5; --rule:#374B5F; --grid:#1B2A39;
+  --accent:#86A8FF; --on-accent:#0E1722; --lit:#FFC83A; --lit-edge:#FFE08A; --on-lit:#16223A;
+  --c-red:#FF6F61; --c-yellow:#FFC04A; --c-teal:#35C9B4; --c-blue:#6C9BFF; --c-violet:#B08CFF; --c-crust:#D0914A;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{
+  font-family:var(--font-body);font-size:16px;line-height:1.45;color:var(--ink);
+  background-color:var(--paper);
+  background-image:linear-gradient(var(--grid) 1px,transparent 1px),linear-gradient(90deg,var(--grid) 1px,transparent 1px);
+  background-size:24px 24px;
+  padding-block:14px;padding-inline:16px;
+}
+.app{max-width:1120px;margin-inline:auto;min-height:100%;display:flex;flex-direction:column;gap:12px}
+.top{display:flex;flex-wrap:wrap;align-items:baseline;gap:2px 16px}
+h1{font:600 clamp(1.45rem,1rem + 2vw,2rem)/1.1 var(--font-display);margin:0;text-wrap:balance}
+h1 .pi{color:var(--accent)}
+.top p{margin:0;color:var(--ink-soft)}
+
+.strip{display:flex;gap:10px;overflow-x:auto;padding:3px 3px 8px;scrollbar-width:thin}
+.thumb{
+  flex:1 0 112px;max-width:170px;display:grid;gap:5px;padding:6px 6px 8px;text-align:left;cursor:pointer;
+  background:var(--surface);color:var(--ink);border:2px solid var(--rule);border-radius:var(--radius);
+  font:500 .84rem/1.15 var(--font-display);
+}
+.thumb canvas{width:100%;height:62px;display:block;border-radius:8px;background:var(--paper)}
+.thumb .lab{display:flex;gap:6px;align-items:baseline}
+.thumb .num{color:var(--ink-soft);font-variant-numeric:tabular-nums}
+.thumb:hover{border-color:var(--ink-soft)}
+.thumb[aria-pressed="true"]{border-color:var(--accent);box-shadow:0 3px 0 var(--accent)}
+
+.stage{
+  flex:1 1 auto;display:flex;flex-direction:column;gap:10px;min-width:0;
+  background:var(--surface);border:2px solid var(--ink);border-radius:18px;padding:14px;
+}
+.stage-head h2{font:600 1.3rem/1.15 var(--font-display);margin:0}
+.stage-head p{margin:2px 0 0;color:var(--ink-soft);max-width:65ch}
+.canvas-wrap{position:relative;flex:1 1 320px;min-height:320px}
+#cv{position:absolute;inset:0;width:100%;height:100%;display:block}
+
+.readout{display:flex;flex-wrap:wrap;align-items:center;gap:10px 22px;border-top:2px dashed var(--rule);padding-top:12px}
+.digits{display:flex;align-items:center;gap:5px;font-family:var(--font-display)}
+.prefix{font-size:1.25rem;font-weight:500;min-width:3.6em;text-align:right;margin-right:4px}
+.tile{
+  width:clamp(1.6rem,7.2vw,2rem);height:2.6rem;display:grid;place-items:center;font-size:1.55rem;font-weight:600;
+  border:2px solid var(--rule);border-radius:9px;background:var(--paper);color:var(--ink);
+  transition:background-color .2s,border-color .2s,color .2s;
+}
+.tile.lit{background:var(--lit);border-color:var(--lit-edge);color:var(--on-lit)}
+.point{font-size:1.55rem;font-weight:600;width:.45rem;text-align:center}
+.notes{flex:1 1 250px;min-width:0}
+.notes p{margin:0}
+.truth{color:var(--ink-soft);font-size:.85rem;font-variant-numeric:tabular-nums}
+
+.controls{display:flex;flex-wrap:wrap;align-items:center;gap:12px 16px;padding:2px 2px 8px}
+.btn{
+  font:500 1rem/1 var(--font-display);padding:.7rem 1rem;min-height:44px;cursor:pointer;
+  display:inline-flex;align-items:center;justify-content:center;gap:.45rem;
+  border-radius:12px;border:2px solid var(--ink);background:var(--surface);color:var(--ink);box-shadow:0 3px 0 var(--ink);
+  transition:transform .06s,box-shadow .06s;
+}
+.btn:active{transform:translateY(3px);box-shadow:0 0 0 var(--ink)}
+.btn.primary{background:var(--accent);color:var(--on-accent);min-width:6.6rem}
+.field{display:flex;align-items:center;gap:8px;font-family:var(--font-display)}
+.field input[type=range]{accent-color:var(--accent);width:clamp(96px,24vw,180px)}
+.field output{min-width:3.4em;font-variant-numeric:tabular-nums;color:var(--ink-soft)}
+:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+@media (prefers-reduced-motion:reduce){.tile,.btn{transition:none}}
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="top">
+    <h1>Seven ways to find <span class="pi">π</span></h1>
+    <p>Pick a method, then press Play.</p>
+  </header>
+
+  <nav class="strip" id="strip" aria-label="Methods"></nav>
+
+  <main class="stage">
+    <div class="stage-head">
+      <h2 id="m-title">Rolling wheel</h2>
+      <p id="m-watch"></p>
+    </div>
+    <div class="canvas-wrap" id="wrap"><canvas id="cv" role="img"></canvas></div>
+    <div class="readout">
+      <div class="digits" id="digits" role="group">
+        <span class="prefix" id="prefix">π ≈</span>
+        <span class="tile">–</span><span class="point">.</span><span class="tile">–</span><span class="tile">–</span><span class="tile">–</span><span class="tile">–</span><span class="tile">–</span>
+      </div>
+      <div class="notes">
+        <p id="note"></p>
+        <p class="truth">True π = 3.14159 26535… Matching digits light up.</p>
+      </div>
+    </div>
+  </main>
+
+  <section class="controls" aria-label="Controls">
+    <button class="btn primary" id="btn-play" type="button">
+      <svg id="ico-play" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M3 1.5v13l11-6.5z" fill="currentColor"/></svg>
+      <svg id="ico-pause" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" hidden><path d="M3 2h4v12H3zM9 2h4v12H9z" fill="currentColor"/></svg>
+      <span id="play-label">Play</span>
+    </button>
+    <button class="btn" id="btn-step" type="button">Step</button>
+    <button class="btn" id="btn-reset" type="button">Reset</button>
+    <div class="field">
+      <label for="speed">Speed</label>
+      <input type="range" id="speed" min="0" max="4" step="1" value="2">
+      <output id="speed-out" for="speed">1×</output>
+    </div>
+    <div class="field" id="extra"></div>
+  </section>
+</div>
+
+<script>
+(() => {
+'use strict';
+const PI = Math.PI, TAU = PI * 2;
+const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
+const lerp = (a, b, t) => a + (b - a) * t;
+const ease = t => t < .5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+const num = n => n.toLocaleString('en-US');
+function rng(seed) {
+  let a = seed >>> 0;
+  return () => { a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
+}
+
+/* ---------- colours come from the page's theme tokens ---------- */
+const FD = "Fredoka,'Trebuchet MS','Segoe UI',sans-serif";
+let C = {}, stamp = 0;
+function readColors() {
+  const cs = getComputedStyle(document.documentElement), g = n => cs.getPropertyValue(n).trim();
+  C = { paper: g('--paper'), surface: g('--surface'), ink: g('--ink'), soft: g('--ink-soft'), rule: g('--rule'), grid: g('--grid'),
+        red: g('--c-red'), yellow: g('--c-yellow'), teal: g('--c-teal'), blue: g('--c-blue'), violet: g('--c-violet'), crust: g('--c-crust') };
+  stamp++;
+}
+
+/* ---------- drawing helpers ---------- */
+function line(ctx, x1, y1, x2, y2) { ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke(); }
+function txt(ctx, s, x, y, o = {}) {
+  ctx.save();
+  ctx.font = `${o.w || 500} ${o.size || 13}px ${FD}`;
+  ctx.textAlign = o.align || 'center'; ctx.textBaseline = o.base || 'middle';
+  if (o.halo) { ctx.lineJoin = 'round'; ctx.lineWidth = 5; ctx.strokeStyle = C.surface; ctx.strokeText(s, x, y); }
+  ctx.fillStyle = o.color || C.ink; ctx.fillText(s, x, y);
+  ctx.restore();
+}
+function stick(ctx, x1, y, x2, color, t) { ctx.strokeStyle = color; ctx.lineWidth = t; ctx.lineCap = 'round'; line(ctx, x1, y, x2, y); }
+function bracket(ctx, x1, y1, x2, y2, color) {
+  ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.lineCap = 'round'; line(ctx, x1, y1, x2, y2);
+  const dx = x2 - x1, dy = y2 - y1, L = Math.hypot(dx, dy) || 1, nx = -dy / L * 5, ny = dx / L * 5;
+  line(ctx, x1 - nx, y1 - ny, x1 + nx, y1 + ny); line(ctx, x2 - nx, y2 - ny, x2 + nx, y2 + ny);
+}
+function poly(ctx, cx, cy, R, n, a0) {
+  ctx.beginPath();
+  for (let i = 0; i < n; i++) { const a = a0 + i * TAU / n, x = cx + R * Math.cos(a), y = cy + R * Math.sin(a); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }
+  ctx.closePath();
+}
+const fsOf = w => clamp(Math.round(w / 52), 12, 15);
+let dpr = 1;
+
+/* An off-screen sheet that keeps thousands of dots or toothpicks without redrawing them every frame. */
+function layerCtx(s, key, wpx, hpx) {
+  if (s.key !== key) {
+    if (!s.layer) s.layer = document.createElement('canvas');
+    s.layer.width = Math.max(1, wpx); s.layer.height = Math.max(1, hpx); s.key = key; s.drawn = 0;
+  }
+  return s.layer.getContext('2d');
+}
+/* Splits the stage into a play area and a chart, side by side on wide screens and stacked on narrow ones. */
+function split(w, h, o, aspect) {
+  const m = o.thumb ? 4 : 18, gap = 20;
+  if (o.thumb) {
+    let aw = w - 2 * m, ah = aw / aspect; if (ah > h - 2 * m) { ah = h - 2 * m; aw = ah * aspect; }
+    return { ax: (w - aw) / 2, ay: (h - ah) / 2, aw, ah, chart: null };
+  }
+  if (w > h * 1.3) {
+    let ah = h - 2 * m, aw = ah * aspect; const maxw = (w - 2 * m - gap) * .58; if (aw > maxw) { aw = maxw; ah = aw / aspect; }
+    return { ax: m, ay: (h - ah) / 2, aw, ah, chart: { x: m + aw + gap, y: m, w: w - 2 * m - gap - aw, h: h - 2 * m } };
+  }
+  let aw = w - 2 * m, ah = aw / aspect; const maxh = (h - 2 * m - gap) * .62; if (ah > maxh) { ah = maxh; aw = ah * aspect; }
+  return { ax: (w - aw) / 2, ay: m, aw, ah, chart: { x: m, y: m + ah + gap, w: w - 2 * m, h: h - 2 * m - gap - ah } };
+}
+/* Running estimate against the number of drops, on a ×10 scale so the slow crawl toward π is visible. */
+function chart(ctx, r, hist, n, curV) {
+  const fs = 11.5, x0 = r.x + 32, x1 = r.x + r.w - 16, y0 = r.y + 24, y1 = r.y + r.h - 22;
+  if (x1 - x0 < 70 || y1 - y0 < 34) return;
+  const lo = 2.4, hi = 3.9, Y = v => y1 - (clamp(v, lo, hi) - lo) / (hi - lo) * (y1 - y0);
+  const dec = Math.max(2, Math.ceil(Math.log10(Math.max(1, n)) - 1e-9)), X = k => x0 + Math.log10(k) / dec * (x1 - x0);
+  txt(ctx, 'The estimate after each drop', x0, r.y + 9, { size: fs + .5, color: C.soft, align: 'left' });
+  ctx.lineWidth = 1;
+  for (const v of [2.5, 3, 3.5]) { ctx.strokeStyle = C.rule; ctx.globalAlpha = .6; line(ctx, x0, Y(v), x1, Y(v)); ctx.globalAlpha = 1; txt(ctx, v.toFixed(1), x0 - 6, Y(v), { size: fs, color: C.soft, align: 'right' }); }
+  const names = ['1', '10', '100', '1k', '10k', '100k', '1M', '10M', '100M', '1B'];
+  ctx.strokeStyle = C.rule;
+  for (let d = 0; d <= dec; d++) { const x = X(Math.pow(10, d)); line(ctx, x, y1, x, y1 + 4); txt(ctx, names[d] || '', x, y1 + 13, { size: fs, color: C.soft }); }
+  ctx.lineWidth = 1.5; line(ctx, x0, y1, x1, y1); line(ctx, x0, y0, x0, y1);
+  ctx.setLineDash([6, 5]); ctx.strokeStyle = C.ink; line(ctx, x0, Y(PI), x1, Y(PI)); ctx.setLineDash([]);
+  txt(ctx, 'π', x1 + 9, Y(PI), { size: fs + 4, color: C.ink, w: 600 });
+  if (hist.length) {
+    ctx.beginPath();
+    hist.forEach((p, i) => { const x = X(p[0]), y = Y(p[1]); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
+    if (curV != null) ctx.lineTo(X(n), Y(curV));
+    ctx.strokeStyle = C.violet; ctx.lineWidth = 2; ctx.lineJoin = 'round'; ctx.stroke();
+    if (curV != null) { ctx.fillStyle = C.violet; ctx.beginPath(); ctx.arc(X(n), Y(curV), 4, 0, TAU); ctx.fill(); }
+  }
+}
+
+/* ============================================================
+   The methods. Each one supplies the same few functions:
+   make, thumb, tick, step, rewind, done, read, draw (+ one extra control).
+   ============================================================ */
+const M = [];
+
+/* ---------- 1. Rolling wheel ---------- */
+M.push({
+  id: 'wheel', title: 'Rolling wheel',
+  watch: 'Roll the wheel one full turn. How many wheel-widths does it travel?',
+  extra: { type: 'range', label: 'Wheel size', min: 55, max: 100, step: 5, fmt: v => v < 70 ? 'small' : v < 90 ? 'medium' : 'large' },
+  make() { return { t: 0, size: 1 }; }, thumb() { return { t: .72, size: 1 }; },
+  getExtra(s) { return Math.round(s.size * 100); }, setExtra(s, v) { s.size = v / 100; },
+  done(s) { return s.t >= 1; }, rewind(s) { s.t = 0; },
+  tick(s, dt) { s.t = Math.min(1, s.t + dt / 5); return s.t < 1; },
+  step(s) { s.t = Math.min(1, (Math.floor(s.t * 4 + 1e-6) + 1) / 4); },
+  read(s) {
+    return s.t >= 1
+      ? { prefix: 'π ≈', value: PI, note: 'One full turn paints 3.14159… wheel-widths of track. Any size wheel gives the same number.' }
+      : { prefix: 'rolled', value: PI * s.t, note: 'Wheel-widths of paint laid down so far.' };
+  },
+  draw(ctx, w, h, s, o) {
+    const m = o.thumb ? 5 : 22, foot = o.thumb ? 10 : 48, fs = fsOf(w);
+    const Dmax = Math.min((w - 2 * m) / 4.6, h - 2 * m - foot), D = Dmax * s.size, r = D / 2;
+    const x0 = (w - 4.6 * D) / 2 + .55 * D, gy = (h - (D + foot)) / 2 + D;
+    const lw = o.thumb ? 2 : Math.max(3, D / 28), dist = PI * D * s.t;
+    ctx.lineCap = 'round';
+    ctx.strokeStyle = C.rule; ctx.lineWidth = o.thumb ? 1.5 : 2; line(ctx, x0 - .4 * D, gy, x0 + 4.05 * D, gy);
+    for (let k = 0; k <= 4; k++) {
+      const x = x0 + k * D; ctx.strokeStyle = C.soft; ctx.lineWidth = o.thumb ? 1 : 2; line(ctx, x, gy, x, gy + (o.thumb ? 4 : 9));
+      if (!o.thumb) txt(ctx, String(k), x, gy + 22, { size: fs + 2 });
+    }
+    if (!o.thumb) txt(ctx, 'wheel-widths', x0 + 2 * D, gy + 41, { size: fs - 1, color: C.soft });
+    if (s.t > 0) { ctx.strokeStyle = C.red; ctx.lineWidth = lw * 1.6; line(ctx, x0, gy, x0 + dist, gy); }
+    if (s.t >= 1 && !o.thumb) {
+      ctx.strokeStyle = C.red; ctx.lineWidth = 2; line(ctx, x0 + PI * D, gy, x0 + PI * D, gy + 10);
+      txt(ctx, 'π', x0 + PI * D, gy + 40, { size: fs + 4, color: C.red, w: 600 });
+    }
+    const cx = x0 + dist, cy = gy - r - lw * .8, phi = TAU * s.t;
+    ctx.fillStyle = C.paper; ctx.beginPath(); ctx.arc(cx, cy, r, 0, TAU); ctx.fill();
+    ctx.strokeStyle = C.rule; ctx.lineWidth = o.thumb ? 1 : 2;
+    for (let i = 0; i < 6; i++) { const a = phi + i * TAU / 6; line(ctx, cx, cy, cx + Math.cos(a) * r * .9, cy + Math.sin(a) * r * .9); }
+    ctx.lineCap = 'butt'; ctx.lineWidth = lw;
+    ctx.strokeStyle = C.soft; ctx.beginPath(); ctx.arc(cx, cy, r - lw / 2, 0, TAU); ctx.stroke();
+    if (s.t < 1) { ctx.strokeStyle = C.red; ctx.beginPath(); ctx.arc(cx, cy, r - lw / 2, PI / 2 + phi, PI / 2 + TAU); ctx.stroke(); }
+    if (!o.thumb) {
+      stick(ctx, cx - r + lw * 1.6, cy, cx + r - lw * 1.6, C.blue, Math.max(3, lw * .8));
+      txt(ctx, '1 width', cx, cy - 13, { size: fs, color: C.blue, w: 600, halo: true });
+    }
+    ctx.fillStyle = C.ink; ctx.beginPath(); ctx.arc(cx, cy, o.thumb ? 2 : Math.max(3, lw * .9), 0, TAU); ctx.fill();
+  }
+});
+
+/* ---------- 2. Unwrapped string ---------- */
+M.push({
+  id: 'string', title: 'Unwrapped string',
+  watch: 'Peel the string off the circle, then measure it with the circle’s own width.',
+  extra: { type: 'range', label: 'Circle size', min: 55, max: 100, step: 5, fmt: v => v < 70 ? 'small' : v < 90 ? 'medium' : 'large' },
+  make() { return { p: 0, size: 1 }; }, thumb() { return { p: 5, size: 1 }; },
+  getExtra(s) { return Math.round(s.size * 100); }, setExtra(s, v) { s.size = v / 100; },
+  done(s) { return s.p >= 5; }, rewind(s) { s.p = 0; },
+  tick(s, dt) { s.p = Math.min(5, s.p + dt * (s.p < 1 ? 1 / 3.5 : 1 / 1.1)); return s.p < 5; },
+  step(s) { s.p = Math.min(5, Math.floor(s.p + 1e-6) + 1); },
+  read(s) {
+    if (s.p >= 5) return { prefix: 'π ≈', value: PI, note: 'The string is 3 circle-widths long, plus a bit. That number is π.' };
+    if (s.p < 2) return { prefix: 'fits', value: null, note: s.p < 1 ? 'Peel the string off the circle and pull it straight.' : 'Now measure the string with the circle’s own width.' };
+    return { prefix: 'fits', value: Math.floor(s.p + 1e-6) - 1, note: 'Circle-widths laid along the string so far.' };
+  },
+  draw(ctx, w, h, s, o) {
+    const m = o.thumb ? 5 : 24, foot = o.thumb ? 12 : 56, fs = fsOf(w);
+    const Dmax = Math.min((w - 2 * m) / 3.7, h - 2 * m - foot), D = Dmax * s.size, r = D / 2;
+    const cx = (w - 3.66 * D) / 2 + r, gy = (h - (D + foot)) / 2 + D, cy = gy - r;
+    const lw = o.thumb ? 2 : Math.max(3, D / 26), sw = o.thumb ? 3 : Math.max(6, D / 16), rowY = gy + (o.thumb ? 6 : 16), gap = sw / 2 + .5;
+    const u = ease(clamp(s.p, 0, 1));
+    ctx.fillStyle = C.paper; ctx.strokeStyle = C.rule; ctx.lineWidth = o.thumb ? 1 : 2;
+    ctx.beginPath(); ctx.arc(cx, cy, r - lw, 0, TAU); ctx.fill(); ctx.stroke();
+    stick(ctx, cx - r + lw + gap, cy, cx + r - lw - gap, C.blue, sw);
+    if (!o.thumb && D > 70) txt(ctx, 'width', cx, cy - sw - 9, { size: fs, color: C.blue, w: 600 });
+    /* the string: straight part on the ground, the rest still wrapped round the circle */
+    ctx.strokeStyle = C.red; ctx.lineWidth = lw; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    ctx.beginPath(); ctx.moveTo(cx + PI * D * u, gy - lw / 2); ctx.lineTo(cx, gy - lw / 2);
+    if (u < 1) ctx.arc(cx, cy, r - lw / 2, PI / 2, PI / 2 + TAU * (1 - u));
+    ctx.stroke();
+    for (let k = 1; k <= 3; k++) {
+      const q = ease(clamp(s.p - k, 0, 1)); if (q <= 0) continue;
+      const ax = lerp(cx - r + lw + gap, cx + (k - 1) * D + gap, q), bx = lerp(cx + r - lw - gap, cx + k * D - gap, q), y = lerp(cy, rowY, q);
+      stick(ctx, ax, y, bx, C.blue, sw);
+      if (q >= 1 && !o.thumb) txt(ctx, String(k), (ax + bx) / 2, rowY + sw + 13, { size: fs + 2, color: C.blue, w: 600 });
+    }
+    const qb = ease(clamp(s.p - 4, 0, 1));
+    if (qb > 0) {
+      const ax = cx + 3 * D + gap, bx = Math.max(ax + .1, lerp(ax, cx + PI * D - gap * .4, qb));
+      stick(ctx, ax, rowY, bx, C.yellow, sw);
+      if (qb >= 1 && !o.thumb) txt(ctx, '+ a bit', cx + 3.07 * D, rowY + sw + 13, { size: fs, w: 600 });
+    }
+  }
+});
+
+/* ---------- 3. Many-sided shapes (Archimedes) ---------- */
+const SIDES = [4, 5, 6, 8, 10, 12, 16, 24, 32, 48, 64, 96];
+M.push({
+  id: 'sides', title: 'Many-sided shapes',
+  watch: 'Trap the circle between two shapes, one inside and one outside. Then keep adding sides.',
+  extra: { type: 'range', label: 'Sides', min: 4, max: 96, step: 1 },
+  make() { return { n: 4, hold: 0 }; }, thumb() { return { n: 6, hold: 0 }; },
+  getExtra(s) { return s.n; }, setExtra(s, v) { s.n = v; s.hold = 0; },
+  done(s) { return s.n >= 96; }, rewind(s) { s.n = 4; s.hold = 0; },
+  tick(s, dt) {
+    s.hold += dt; if (s.hold < .9) return true; s.hold = 0;
+    const nx = SIDES.find(v => v > s.n); if (!nx) return false; s.n = nx; return nx < 96;
+  },
+  step(s) { const nx = SIDES.find(v => v > s.n); if (nx) s.n = nx; },
+  read(s) {
+    return { prefix: 'π ≈', value: s.n * Math.sin(PI / s.n), note: `Edge of the ${s.n}-sided inside shape ÷ the circle’s width. The true π sits between the two shapes.` };
+  },
+  draw(ctx, w, h, s, o) {
+    const m = o.thumb ? 4 : 20, foot = o.thumb ? 0 : 36, fs = fsOf(w), n = s.n;
+    const R = Math.min(w - 2 * m, h - 2 * m - foot) / 2.5, cx = w / 2, cy = (h - foot) / 2 + (o.thumb ? 0 : 4);
+    const Ro = R / Math.cos(PI / n);
+    poly(ctx, cx, cy, Ro, n, PI / 2 + PI / n); ctx.fillStyle = C.blue; ctx.globalAlpha = .13; ctx.fill(); ctx.globalAlpha = 1;
+    ctx.fillStyle = C.surface; ctx.beginPath(); ctx.arc(cx, cy, R, 0, TAU); ctx.fill();
+    poly(ctx, cx, cy, R, n, PI / 2); ctx.fillStyle = C.red; ctx.globalAlpha = .14; ctx.fill(); ctx.globalAlpha = 1;
+    ctx.strokeStyle = C.ink; ctx.lineWidth = o.thumb ? 1.6 : 3.5; ctx.beginPath(); ctx.arc(cx, cy, R, 0, TAU); ctx.stroke();
+    ctx.lineJoin = 'round'; ctx.lineWidth = o.thumb ? 1.3 : 2.2;
+    poly(ctx, cx, cy, Ro, n, PI / 2 + PI / n); ctx.strokeStyle = C.blue; ctx.stroke();
+    poly(ctx, cx, cy, R, n, PI / 2); ctx.strokeStyle = C.red; ctx.stroke();
+    if (o.thumb) return;
+    const y = h - m - 6;
+    txt(ctx, `${n} sides`, m, m + 6, { size: fs + 3, align: 'left', w: 600 });
+    txt(ctx, 'inside ' + (n * Math.sin(PI / n)).toFixed(4), cx - 34, y, { size: fs + 1, color: C.red, align: 'right', w: 600 });
+    txt(ctx, '< π <', cx, y, { size: fs + 2, w: 600 });
+    txt(ctx, (n * Math.tan(PI / n)).toFixed(4) + ' outside', cx + 34, y, { size: fs + 1, color: C.blue, align: 'left', w: 600 });
+  }
+});
+
+/* ---------- 4. Pizza slices ---------- */
+const SLICES = [4, 8, 16, 32, 64, 100];
+function slice(ctx, ax, ay, r, th, al, fill, cw, edge) {
+  ctx.beginPath(); ctx.moveTo(ax, ay); ctx.arc(ax, ay, r, th - al, th + al); ctx.closePath();
+  ctx.fillStyle = fill; ctx.fill();
+  ctx.strokeStyle = C.surface; ctx.lineWidth = edge; ctx.lineJoin = 'round'; ctx.stroke();
+  ctx.beginPath(); ctx.arc(ax, ay, r - cw / 2, th - al, th + al);
+  ctx.strokeStyle = C.crust; ctx.lineWidth = cw; ctx.lineCap = 'butt'; ctx.stroke();
+}
+M.push({
+  id: 'pizza', title: 'Pizza slices',
+  watch: 'Line the slices up, tips up and tips down. Thinner slices make a better rectangle.',
+  extra: { type: 'range', label: 'Slices', min: 4, max: 100, step: 2 },
+  make() { return { n: 8, t: 0, hold: 0 }; }, thumb() { return { n: 8, t: 1, hold: 0 }; },
+  getExtra(s) { return s.n; }, setExtra(s, v) { s.n = v; s.hold = 0; },
+  done(s) { return s.t >= 1 && s.n >= 100; }, rewind(s) { s.t = 0; s.hold = 0; },
+  tick(s, dt) {
+    if (s.t < 1) { s.t = Math.min(1, s.t + dt / 3.2); return true; }
+    s.hold += dt; if (s.hold < 1.1) return true; s.hold = 0;
+    const nx = SLICES.find(v => v > s.n); if (!nx) return false; s.n = nx; return nx < 100;
+  },
+  step(s) { if (s.t < 1) { s.t = 1; return; } const nx = SLICES.find(v => v > s.n); if (nx) s.n = nx; },
+  read(s) {
+    if (s.t < 1) return { prefix: 'π ≈', value: null, note: 'Half the slices point up and half point down.' };
+    return { prefix: 'π ≈', value: s.n * Math.sin(PI / s.n), note: `Base ÷ radius with ${s.n} slices. The base is half the crust and the height is one radius, so area = π × r × r.` };
+  },
+  draw(ctx, w, h, s, o) {
+    const m = o.thumb ? 4 : 20, foot = o.thumb ? 0 : 40, fs = fsOf(w), n = s.n, al = PI / n, half = n / 2, T = s.t;
+    const r = Math.min((w - 2 * m) / 3.8, (h - 2 * m - foot) / 2), cx = w / 2, cy = m + (h - 2 * m - foot) / 2;
+    const c = 2 * r * Math.sin(al), hg = r * Math.cos(al), x0 = cx - (n + 1) * r * Math.sin(al) / 2;
+    const cw = Math.max(o.thumb ? 1.5 : 2.5, r * .07), edge = o.thumb ? .6 : n <= 16 ? 1.5 : n <= 40 ? 1 : .5;
+    for (let i = 0; i < n; i++) {
+      const top = i < half, k = top ? i : n - 1 - i;
+      const th0 = PI + (i + .5) * 2 * al, th1 = top ? 1.5 * PI : 2.5 * PI;
+      const ax1 = top ? x0 + (k + 1) * c : x0 + c / 2 + k * c, ay1 = top ? cy + hg / 2 : cy - hg / 2;
+      const q = ease(clamp(T * 1.5 - .5 * (k / half), 0, 1));
+      slice(ctx, lerp(cx, ax1, q), lerp(cy, ay1, q), r, lerp(th0, th1, q), al, top ? C.yellow : C.red, cw, edge);
+    }
+    if (o.thumb) return;
+    if (T < .2) {
+      ctx.globalAlpha = 1 - T * 5; ctx.strokeStyle = C.ink; ctx.lineWidth = 2.5; ctx.lineCap = 'round'; line(ctx, cx, cy, cx + r - cw, cy);
+      txt(ctx, 'r', cx + r / 2, cy - 13, { size: fs + 4, w: 600, halo: true }); ctx.globalAlpha = 1;
+    }
+    const A = clamp((T - .92) / .08, 0, 1);
+    if (A > 0) {
+      ctx.globalAlpha = A;
+      const yb = cy - hg / 2 + r + 11;
+      bracket(ctx, x0, yb, x0 + half * c, yb, C.ink);
+      txt(ctx, `base = ${(n * Math.sin(al)).toFixed(2)} × r`, x0 + half * c / 2, yb + 17, { size: fs + 1, w: 600 });
+      bracket(ctx, x0 - 9, cy - hg / 2, x0 - 9, cy + hg / 2, C.ink);
+      txt(ctx, 'r', x0 - 20, cy, { size: fs + 3, w: 600 });
+      ctx.globalAlpha = 1;
+    }
+  }
+});
+
+/* ---------- 5. Radius squares ---------- */
+function makeCells(g) {
+  const a = [];
+  for (let j = 0; j < 2 * g; j++) for (let i = 0; i < 2 * g; i++) { const x = (i + .5) / g - 1, y = (j + .5) / g - 1; if (x * x + y * y < 1) a.push(i, j); }
+  return a;
+}
+M.push({
+  id: 'squares', title: 'Radius squares',
+  watch: 'Pour the circle’s tiles into squares that are one radius wide. How many squares fill up?',
+  extra: { type: 'range', label: 'Tiles per radius', min: 4, max: 40, step: 2 },
+  make() { return { g: 8, k: 0, cells: makeCells(8) }; },
+  thumb() { const c = makeCells(6); return { g: 6, k: c.length / 2, cells: c }; },
+  getExtra(s) { return s.g; },
+  setExtra(s, v) { const f = s.k / (s.cells.length / 2); s.g = v; s.cells = makeCells(v); s.k = Math.round(f * s.cells.length / 2); },
+  done(s) { return s.k >= s.cells.length / 2; }, rewind(s) { s.k = 0; },
+  tick(s, dt) { const N = s.cells.length / 2; s.k = Math.min(N, s.k + dt * N / 7); return s.k < N; },
+  step(s) { const N = s.cells.length / 2, gg = s.g * s.g; s.k = Math.min(N, (Math.floor(s.k / gg + 1e-6) + 1) * gg); },
+  read(s) {
+    const N = s.cells.length / 2, K = Math.floor(s.k + 1e-6), gg = s.g * s.g;
+    return K < N
+      ? { prefix: 'filled', value: K / gg, note: 'Radius-squares filled with tiles from the circle so far.' }
+      : { prefix: 'π ≈', value: N / gg, note: `The circle holds ${num(N)} tiles and one radius-square holds ${num(gg)}. Smaller tiles get closer to π.` };
+  },
+  draw(ctx, w, h, s, o) {
+    const m = o.thumb ? 4 : 22, cap = o.thumb ? 0 : 24, gap = o.thumb ? 6 : 26, jg = o.thumb ? 2 : 8, fs = fsOf(w);
+    const g = s.g, cells = s.cells, N = cells.length / 2, K = Math.min(N, Math.floor(s.k + 1e-6)), gg = g * g;
+    const rA = Math.min((w - 2 * m - gap - jg) / 4, (h - 2 * m - cap - jg) / 2), rB = Math.min((w - 2 * m - 3 * jg) / 4, (h - 2 * m - gap - cap) / 3);
+    const side = rA >= rB, r = Math.max(8, Math.floor(side ? rA : rB)), cs = r / g, jar = [];
+    let bx, by;
+    if (side) {
+      bx = (w - (4 * r + gap + jg)) / 2; by = (h - cap - (2 * r + jg)) / 2; const jx = bx + 2 * r + gap;
+      jar.push([jx, by], [jx + r + jg, by], [jx, by + r + jg], [jx + r + jg, by + r + jg]);
+    } else {
+      bx = (w - 2 * r) / 2; by = (h - (3 * r + gap + cap)) / 2; const jx = (w - (4 * r + 3 * jg)) / 2;
+      for (let q = 0; q < 4; q++) jar.push([jx + q * (r + jg), by + 2 * r + gap]);
+    }
+    const cols = [C.blue, C.teal, C.violet, C.yellow], ins = cs > 6 ? .6 : 0;
+    ctx.strokeStyle = C.rule; ctx.lineWidth = o.thumb ? 1 : 1.5; ctx.setLineDash([5, 4]);
+    ctx.strokeRect(bx, by, 2 * r, 2 * r); line(ctx, bx + r, by, bx + r, by + 2 * r); line(ctx, bx, by + r, bx + 2 * r, by + r); ctx.setLineDash([]);
+    let q = -1;
+    for (let i = 0; i < K; i++) {
+      const qq = Math.min(3, (i / gg) | 0); if (qq !== q) { q = qq; ctx.fillStyle = cols[q]; }
+      ctx.fillRect(bx + cells[2 * i] * cs + ins, by + cells[2 * i + 1] * cs + ins, cs - 2 * ins, cs - 2 * ins);
+    }
+    ctx.strokeStyle = C.ink; ctx.lineWidth = o.thumb ? 1.5 : 2.5; ctx.beginPath(); ctx.arc(bx + r, by + r, r, 0, TAU); ctx.stroke();
+    let jb = 0, jl = Infinity, jr = 0;
+    for (let j = 0; j < 4; j++) {
+      const [jx, jy] = jar[j]; jb = Math.max(jb, jy + r); jl = Math.min(jl, jx); jr = Math.max(jr, jx + r);
+      ctx.fillStyle = C.paper; ctx.fillRect(jx, jy, r, r);
+      const a = j * gg, b = Math.min(K, a + gg); ctx.fillStyle = cols[j];
+      for (let i = a; i < b; i++) { const p = i - a, col = p % g, row = g - 1 - ((p / g) | 0); ctx.fillRect(jx + col * cs + ins, jy + row * cs + ins, cs - 2 * ins, cs - 2 * ins); }
+      ctx.strokeStyle = C.ink; ctx.lineWidth = o.thumb ? 1 : 2; ctx.strokeRect(jx, jy, r, r);
+    }
+    if (o.thumb) return;
+    txt(ctx, 'r', bx + r / 2, by - 10, { size: fs + 2, w: 600, color: C.soft });
+    txt(ctx, 'r', bx + 1.5 * r, by - 10, { size: fs + 2, w: 600, color: C.soft });
+    txt(ctx, 'each square is one radius wide', (jl + jr) / 2, jb + 15, { size: fs, color: C.soft });
+  }
+});
+
+/* ---------- 6. Raining dots ---------- */
+const DCAP = 40000;
+M.push({
+  id: 'dots', title: 'Raining dots',
+  watch: 'Dots land anywhere in the square, by chance. Count the ones that land inside the circle.',
+  extra: { type: 'button', label: 'Drop 1,000' },
+  make() { return { n: 0, inside: 0, pts: new Float32Array(2 * DCAP), hist: [], next: 1, acc: 0, layer: null, key: '', drawn: 0, rnd: Math.random }; },
+  thumb() { const s = this.make(); s.rnd = rng(7); this.drop(s, 170); return s; },
+  drop(s, count) {
+    for (let c = 0; c < count; c++) {
+      const x = s.rnd() * 2 - 1, y = s.rnd() * 2 - 1;
+      if (s.n < DCAP) { s.pts[2 * s.n] = x; s.pts[2 * s.n + 1] = y; }
+      if (x * x + y * y <= 1) s.inside++;
+      s.n++;
+      if (s.n <= 64 || s.n >= s.next) { s.hist.push([s.n, 4 * s.inside / s.n]); s.next = Math.ceil(s.n * 1.03) + 1; }
+    }
+  },
+  extraAction(s) { this.drop(s, 1000); },
+  done() { return false; }, rewind() {},
+  tick(s, dt) { s.acc += dt * 30; const k = Math.floor(s.acc); if (k) { s.acc -= k; this.drop(s, k); } return true; },
+  step(s) { this.drop(s, 1); },
+  read(s) {
+    if (!s.n) return { prefix: 'π ≈', value: null, note: 'The circle covers π ÷ 4 of the square, so about that share of the dots should land in it.' };
+    return { prefix: 'π ≈', value: 4 * s.inside / s.n, note: `4 × ${num(s.inside)} inside ÷ ${num(s.n)} dropped.` };
+  },
+  draw(ctx, w, h, s, o) {
+    const L = split(w, h, o, 1), S = L.aw, ax = L.ax, ay = L.ay, rad = o.thumb ? 1.4 : clamp(S / 130, 1.3, 2.8);
+    ctx.fillStyle = C.paper; ctx.fillRect(ax, ay, S, S);
+    ctx.fillStyle = C.surface; ctx.beginPath(); ctx.arc(ax + S / 2, ay + S / 2, S / 2, 0, TAU); ctx.fill();
+    const end = Math.min(s.n, DCAP);
+    const paint = (c, from, sc, ox, oy, rr) => {
+      for (let i = from; i < end; i++) {
+        const x = s.pts[2 * i], y = s.pts[2 * i + 1];
+        c.fillStyle = x * x + y * y <= 1 ? C.blue : C.yellow; c.beginPath(); c.arc(ox + (x + 1) * sc, oy + (y + 1) * sc, rr, 0, TAU); c.fill();
+      }
+    };
+    if (o.thumb) paint(ctx, 0, S / 2, ax, ay, rad);
+    else {
+      const px = Math.round(S * dpr), lc = layerCtx(s, px + '|' + stamp, px, px);
+      paint(lc, s.drawn, px / 2, 0, 0, rad * dpr); s.drawn = end;
+      ctx.drawImage(s.layer, ax, ay, S, S);
+    }
+    ctx.strokeStyle = C.ink; ctx.lineWidth = o.thumb ? 1.2 : 2;
+    ctx.strokeRect(ax, ay, S, S); ctx.beginPath(); ctx.arc(ax + S / 2, ay + S / 2, S / 2, 0, TAU); ctx.stroke();
+    if (L.chart) chart(ctx, L.chart, s.hist, s.n, s.n ? 4 * s.inside / s.n : null);
+  }
+});
+
+/* ---------- 7. Dropped toothpicks (Buffon) ---------- */
+const TCAP = 250;
+M.push({
+  id: 'toothpicks', title: 'Dropped toothpicks',
+  watch: 'Each toothpick is as long as the gap between the lines. Count the ones that touch a line.',
+  extra: { type: 'button', label: 'Drop 1,000' },
+  make() { return { n: 0, cross: 0, st: new Float32Array(3 * TCAP), hist: [], next: 1, acc: 0, rnd: Math.random, rows: 5 }; },
+  thumb() { const s = this.make(); s.rnd = rng(11); s.rows = 3; this.drop(s, 34); return s; },
+  drop(s, count) {
+    for (let c = 0; c < count; c++) {
+      const x = s.rnd(), y = s.rnd() * s.rows, a = s.rnd() * PI, dy = Math.sin(a) / 2;
+      const hit = Math.floor(y - dy) !== Math.floor(y + dy);
+      const at = 3 * (s.n % TCAP); s.st[at] = x; s.st[at + 1] = y; s.st[at + 2] = hit ? a : -a - 1;
+      if (hit) s.cross++;
+      s.n++;
+      if (s.n <= 64 || s.n >= s.next) { s.hist.push([s.n, s.cross ? 2 * s.n / s.cross : Infinity]); s.next = Math.ceil(s.n * 1.03) + 1; }
+    }
+  },
+  extraAction(s) { this.drop(s, 1000); },
+  done() { return false; }, rewind() {},
+  tick(s, dt) { s.acc += dt * 20; const k = Math.floor(s.acc); if (k) { s.acc -= k; this.drop(s, k); } return true; },
+  step(s) { this.drop(s, 1); },
+  read(s) {
+    if (!s.n) return { prefix: 'π ≈', value: null, note: 'There is no circle here at all, and π still turns up.' };
+    return { prefix: 'π ≈', value: s.cross ? 2 * s.n / s.cross : null, note: `2 × ${num(s.n)} dropped ÷ ${num(s.cross)} touching a line.` + (s.n > TCAP ? ` The floor shows the newest ${TCAP}.` : '') };
+  },
+  draw(ctx, w, h, s, o) {
+    const L = split(w, h, o, o.thumb ? (w - 8) / (h - 8) : 1.5), Wf = L.aw, Hf = L.ah, ax = L.ax, ay = L.ay, d = Hf / s.rows;
+    const lw = o.thumb ? 1.4 : Math.max(1.6, d / 18), end = Math.min(s.n, TCAP);
+    ctx.fillStyle = C.paper; ctx.fillRect(ax, ay, Wf, Hf);
+    const paint = (c, sx, sy) => {
+      for (let i = 0; i < end; i++) {
+        const v = s.st[3 * i + 2], hit = v >= 0, a = hit ? v : -v - 1, px = s.st[3 * i] * sx, py = s.st[3 * i + 1] * sy;
+        const dx = Math.cos(a) * sy / 2, dy = Math.sin(a) * sy / 2;
+        c.strokeStyle = hit ? C.red : C.blue; c.beginPath(); c.moveTo(px - dx, py - dy); c.lineTo(px + dx, py + dy); c.stroke();
+      }
+    };
+    ctx.strokeStyle = C.ink; ctx.lineWidth = o.thumb ? 1 : 1.6; ctx.lineCap = 'butt';
+    for (let k = 0; k <= s.rows; k++) line(ctx, ax, ay + k * d, ax + Wf, ay + k * d);
+    ctx.save(); ctx.beginPath(); ctx.rect(ax, ay, Wf, Hf); ctx.clip(); ctx.translate(ax, ay);
+    ctx.lineWidth = lw; ctx.lineCap = 'round'; paint(ctx, Wf, d); ctx.restore();
+    if (L.chart) chart(ctx, L.chart, s.hist, s.n, s.n && s.cross ? 2 * s.n / s.cross : null);
+  }
+});
+
+/* ============================================================
+   The shell: strip, stage, readout, controls.
+   ============================================================ */
+const $ = id => document.getElementById(id);
+const cv = $('cv'), ctx = cv.getContext('2d'), wrap = $('wrap'), strip = $('strip');
+const SPEEDS = [.25, .5, 1, 2, 4], SPEED_NAMES = ['¼×', '½×', '1×', '2×', '4×'];
+let cur = M[0], state = cur.make(), playing = false, speed = 1, dirty = true, last = 0, W = 300, H = 300, lastKey = '';
+let extraInp = null, extraOut = null;
+
+const thumbs = M.map((m, i) => {
+  const b = document.createElement('button'); b.type = 'button'; b.className = 'thumb'; b.id = 'pick-' + m.id; b.setAttribute('aria-pressed', 'false');
+  const c = document.createElement('canvas'); c.setAttribute('aria-hidden', 'true');
+  const lab = document.createElement('span'); lab.className = 'lab';
+  const n = document.createElement('span'); n.className = 'num'; n.textContent = String(i + 1);
+  const t = document.createElement('span'); t.textContent = m.title;
+  lab.append(n, t); b.append(c, lab); b.addEventListener('click', () => select(m.id)); strip.append(b);
+  return { m, c, b };
+});
+function drawThumbs() {
+  const d = Math.min(window.devicePixelRatio || 1, 2.5);
+  for (const t of thumbs) {
+    const w = t.c.clientWidth, h = t.c.clientHeight; if (!w || !h) continue;
+    t.c.width = Math.round(w * d); t.c.height = Math.round(h * d);
+    const x = t.c.getContext('2d'); x.setTransform(d, 0, 0, d, 0, 0); x.clearRect(0, 0, w, h);
+    t.m._thumb = t.m._thumb || t.m.thumb();
+    x.save(); t.m.draw(x, w, h, t.m._thumb, { thumb: true }); x.restore();
+  }
+}
+
+function setPlaying(v) {
+  playing = v;
+  $('ico-play').toggleAttribute('hidden', v); $('ico-pause').toggleAttribute('hidden', !v);
+  $('play-label').textContent = v ? 'Pause' : 'Play';
+}
+function buildExtra() {
+  const box = $('extra'), e = cur.extra; box.textContent = ''; extraInp = extraOut = null;
+  if (!e) { box.hidden = true; return; }
+  box.hidden = false;
+  if (e.type === 'range') {
+    const lab = document.createElement('label'); lab.htmlFor = 'extra-range'; lab.textContent = e.label;
+    const inp = document.createElement('input'); inp.type = 'range'; inp.id = 'extra-range'; inp.min = e.min; inp.max = e.max; inp.step = e.step; inp.value = cur.getExtra(state);
+    const out = document.createElement('output'); out.id = 'extra-out'; out.htmlFor = 'extra-range';
+    const show = () => { out.textContent = e.fmt ? e.fmt(+inp.value) : inp.value; };
+    show();
+    inp.addEventListener('input', () => { cur.setExtra(state, +inp.value); show(); dirty = true; });
+    box.append(lab, inp, out); extraInp = inp; extraOut = out;
+  } else {
+    const b = document.createElement('button'); b.type = 'button'; b.className = 'btn'; b.id = 'extra-btn'; b.textContent = e.label;
+    b.addEventListener('click', () => { cur.extraAction(state); dirty = true; });
+    box.append(b);
+  }
+}
+function select(id) {
+  cur = M.find(m => m.id === id) || M[0]; state = cur.make(); setPlaying(false);
+  $('m-title').textContent = cur.title; $('m-watch').textContent = cur.watch;
+  cv.setAttribute('aria-label', cur.title + '. ' + cur.watch);
+  thumbs.forEach(t => t.b.setAttribute('aria-pressed', String(t.m === cur)));
+  buildExtra(); lastKey = ''; dirty = true;
+  try { localStorage.setItem('pi-method', cur.id); } catch (e) {}
+}
+
+const tiles = [...$('digits').querySelectorAll('.tile')], TILE_AT = [0, 2, 3, 4, 5, 6], TARGET = '3.14159';
+function updateReadout() {
+  const r = cur.read(state);
+  const str = r.value == null || !isFinite(r.value) ? null : Math.min(r.value, 9.99999).toFixed(5);
+  const key = r.prefix + '|' + str + '|' + r.note; if (key === lastKey) return; lastKey = key;
+  $('prefix').textContent = r.prefix;
+  let lit = 0;
+  if (str && r.prefix === 'π ≈') while (lit < 7 && str[lit] === TARGET[lit]) lit++;
+  tiles.forEach((el, i) => { const at = TILE_AT[i]; el.textContent = str ? str[at] : '–'; el.classList.toggle('lit', at < lit); });
+  $('digits').setAttribute('aria-label', str ? `${r.prefix} ${str}` : `${r.prefix} not measured yet`);
+  $('note').textContent = r.note;
+}
+function render() {
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, W, H);
+  ctx.save(); cur.draw(ctx, W, H, state, { thumb: false }); ctx.restore();
+  if (extraInp) { const v = cur.getExtra(state); if (+extraInp.value !== v) { extraInp.value = v; extraOut.textContent = cur.extra.fmt ? cur.extra.fmt(v) : String(v); } }
+  updateReadout();
+}
+function frame(ts) {
+  const dt = Math.min(.05, (ts - last) / 1000 || 0); last = ts;
+  if (playing) { const more = cur.tick(state, dt * speed); dirty = true; if (more === false) setPlaying(false); }
+  if (dirty) { dirty = false; render(); }
+  requestAnimationFrame(frame);
+}
+function resize() {
+  const r = wrap.getBoundingClientRect();
+  dpr = Math.min(window.devicePixelRatio || 1, 2.5); W = Math.max(60, r.width); H = Math.max(60, r.height);
+  cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr); dirty = true;
+}
+
+$('btn-play').addEventListener('click', () => { if (!playing && cur.done(state)) cur.rewind(state); setPlaying(!playing); dirty = true; });
+$('btn-step').addEventListener('click', () => { setPlaying(false); cur.step(state); dirty = true; });
+$('btn-reset').addEventListener('click', () => { setPlaying(false); state = cur.make(); buildExtra(); dirty = true; });
+$('speed').addEventListener('input', e => { speed = SPEEDS[+e.target.value]; $('speed-out').textContent = SPEED_NAMES[+e.target.value]; });
+
+function retheme() { readColors(); drawThumbs(); dirty = true; }
+try { window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', retheme); } catch (e) {}
+new MutationObserver(retheme).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+new ResizeObserver(resize).observe(wrap);
+new ResizeObserver(drawThumbs).observe(strip);
+if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => { dirty = true; });
+
+function start(saved) {
+  readColors();
+  let id = saved && saved.id;
+  if (!id) { const hsh = location.hash.slice(1); if (M.some(m => m.id === hsh)) id = hsh; }
+  if (!id) { try { id = localStorage.getItem('pi-method'); } catch (e) {} }
+  speed = SPEEDS[+$('speed').value] || 1; $('speed-out').textContent = SPEED_NAMES[+$('speed').value] || '1×';
+  select(id || 'wheel'); resize(); drawThumbs(); requestAnimationFrame(frame);
+}
+start();
+})();
+</script>
+</body>
+</html>
