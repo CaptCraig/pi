@@ -202,7 +202,7 @@ function txt(ctx, s, x, y, o = {}) {
   ctx.fillStyle = o.color || C.ink; ctx.fillText(s, x, y);
   ctx.restore();
 }
-function stick(ctx, x1, y, x2, color, t) { ctx.strokeStyle = color; ctx.lineWidth = t; ctx.lineCap = 'round'; line(ctx, x1, y, x2, y); }
+function stick(ctx, x1, y, x2, color, t, cap) { ctx.strokeStyle = color; ctx.lineWidth = t; ctx.lineCap = cap || 'round'; line(ctx, x1, y, x2, y); }
 function bracket(ctx, x1, y1, x2, y2, color) {
   ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.lineCap = 'round'; line(ctx, x1, y1, x2, y2);
   const dx = x2 - x1, dy = y2 - y1, L = Math.hypot(dx, dy) || 1, nx = -dy / L * 5, ny = dx / L * 5;
@@ -303,14 +303,21 @@ M.push({
     const cx = x0 + dist, cy = gy - r - lw * .8, phi = TAU * s.t;
     ctx.fillStyle = C.paper; ctx.beginPath(); ctx.arc(cx, cy, r, 0, TAU); ctx.fill();
     ctx.strokeStyle = C.rule; ctx.lineWidth = o.thumb ? 1 : 2;
-    for (let i = 0; i < 6; i++) { const a = phi + i * TAU / 6; line(ctx, cx, cy, cx + Math.cos(a) * r * .9, cy + Math.sin(a) * r * .9); }
+    for (let i = 1; i < 6; i++) { const a = phi + PI / 2 + i * TAU / 6; line(ctx, cx, cy, cx + Math.cos(a) * r * .9, cy + Math.sin(a) * r * .9); }
+    /* rim: the spent part goes pale, the wet paint stays red, and a thin outline keeps the pale rim visible */
     ctx.lineCap = 'butt'; ctx.lineWidth = lw;
-    ctx.strokeStyle = C.soft; ctx.beginPath(); ctx.arc(cx, cy, r - lw / 2, 0, TAU); ctx.stroke();
+    ctx.strokeStyle = C.rule; ctx.beginPath(); ctx.arc(cx, cy, r - lw / 2, 0, TAU); ctx.stroke();
     if (s.t < 1) { ctx.strokeStyle = C.red; ctx.beginPath(); ctx.arc(cx, cy, r - lw / 2, PI / 2 + phi, PI / 2 + TAU); ctx.stroke(); }
-    if (!o.thumb) {
-      stick(ctx, cx - r + lw * 1.6, cy, cx + r - lw * 1.6, C.blue, Math.max(3, lw * .8));
-      txt(ctx, '1 width', cx, cy - 13, { size: fs, color: C.blue, w: 600, halo: true });
+    ctx.strokeStyle = C.soft; ctx.lineWidth = o.thumb ? 1 : 1.5; ctx.beginPath(); ctx.arc(cx, cy, r, 0, TAU); ctx.stroke();
+    if (!o.thumb) stick(ctx, cx - r + lw * 1.6, cy, cx + r - lw * 1.6, C.blue, Math.max(3, lw * .8));
+    /* arrow from the hub to the spot on the rim that starts on "0"; it turns with the wheel */
+    {
+      const a = phi + PI / 2, ux = Math.cos(a), uy = Math.sin(a), hd = o.thumb ? 4 : Math.max(10, r * .18), aw = o.thumb ? 1.4 : Math.max(2.5, lw * .7);
+      const tx = cx + ux * (r - 1), ty = cy + uy * (r - 1), bx = tx - ux * hd, by = ty - uy * hd;
+      ctx.strokeStyle = C.ink; ctx.lineWidth = aw; ctx.lineCap = 'round'; line(ctx, cx, cy, bx, by);
+      ctx.fillStyle = C.ink; ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(bx - uy * hd * .5, by + ux * hd * .5); ctx.lineTo(bx + uy * hd * .5, by - ux * hd * .5); ctx.closePath(); ctx.fill();
     }
+    if (!o.thumb) txt(ctx, '1 width', cx, cy - 13, { size: fs, color: C.blue, w: 600, halo: true });
     ctx.fillStyle = C.ink; ctx.beginPath(); ctx.arc(cx, cy, o.thumb ? 2 : Math.max(3, lw * .9), 0, TAU); ctx.fill();
   }
 });
@@ -334,29 +341,38 @@ M.push({
     const m = o.thumb ? 5 : 24, foot = o.thumb ? 12 : 56, fs = fsOf(w);
     const Dmax = Math.min((w - 2 * m) / 3.7, h - 2 * m - foot), D = Dmax * s.size, r = D / 2;
     const cx = (w - 3.66 * D) / 2 + r, gy = (h - (D + foot)) / 2 + D, cy = gy - r;
-    const lw = o.thumb ? 2 : Math.max(3, D / 26), sw = o.thumb ? 3 : Math.max(6, D / 16), rowY = gy + (o.thumb ? 6 : 16), gap = sw / 2 + .5;
+    const lw = o.thumb ? 2 : Math.max(3, D / 26), sw = o.thumb ? 3 : Math.max(6, D / 16), rowY = gy + (o.thumb ? 6 : 16);
     const u = ease(clamp(s.p, 0, 1));
     ctx.fillStyle = C.paper; ctx.strokeStyle = C.rule; ctx.lineWidth = o.thumb ? 1 : 2;
-    ctx.beginPath(); ctx.arc(cx, cy, r - lw, 0, TAU); ctx.fill(); ctx.stroke();
-    stick(ctx, cx - r + lw + gap, cy, cx + r - lw - gap, C.blue, sw);
-    if (!o.thumb && D > 70) txt(ctx, 'width', cx, cy - sw - 9, { size: fs, color: C.blue, w: 600 });
-    /* the string: straight part on the ground, the rest still wrapped round the circle */
-    ctx.strokeStyle = C.red; ctx.lineWidth = lw; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-    ctx.beginPath(); ctx.moveTo(cx + PI * D * u, gy - lw / 2); ctx.lineTo(cx, gy - lw / 2);
-    if (u < 1) ctx.arc(cx, cy, r - lw / 2, PI / 2, PI / 2 + TAU * (1 - u));
+    ctx.beginPath(); ctx.arc(cx, cy, r - lw / 2, 0, TAU); ctx.fill(); ctx.stroke();
+    /* the string: straight part on the ground, the rest still wrapped round the circle.
+       Its centre line has radius r, so the loop is exactly one width (D) across and π × D long. */
+    ctx.strokeStyle = C.red; ctx.lineWidth = lw; ctx.lineCap = 'butt'; ctx.lineJoin = 'round';
+    ctx.beginPath(); ctx.moveTo(cx + PI * D * u, gy); ctx.lineTo(cx, gy);
+    if (u < 1) ctx.arc(cx, cy, r, PI / 2, PI / 2 + TAU * (1 - u));
     ctx.stroke();
+    /* the width bar spans the loop, centre line to centre line, so it is exactly D long */
+    stick(ctx, cx - r, cy, cx + r, C.blue, sw, 'butt');
+    if (!o.thumb && D > 70) txt(ctx, 'width', cx, cy - sw - 9, { size: fs, color: C.blue, w: 600 });
+    /* measuring row: square-ended bars laid end to end from the string's left end, with a tick at each join */
+    const tickTop = gy + lw / 2 + (o.thumb ? 1 : 2), tickBot = rowY + sw / 2 + (o.thumb ? 2 : 4), ticks = [];
     for (let k = 1; k <= 3; k++) {
       const q = ease(clamp(s.p - k, 0, 1)); if (q <= 0) continue;
-      const ax = lerp(cx - r + lw + gap, cx + (k - 1) * D + gap, q), bx = lerp(cx + r - lw - gap, cx + k * D - gap, q), y = lerp(cy, rowY, q);
-      stick(ctx, ax, y, bx, C.blue, sw);
-      if (q >= 1 && !o.thumb) txt(ctx, String(k), (ax + bx) / 2, rowY + sw + 13, { size: fs + 2, color: C.blue, w: 600 });
+      const ax = lerp(cx - r, cx + (k - 1) * D, q), y = lerp(cy, rowY, q);
+      stick(ctx, ax, y, ax + D, C.blue, sw, 'butt');
+      if (q >= 1) {
+        if (k === 1) ticks.push(cx);
+        ticks.push(cx + k * D);
+        if (!o.thumb) txt(ctx, String(k), cx + (k - .5) * D, rowY + sw + 13, { size: fs + 2, color: C.blue, w: 600 });
+      }
     }
     const qb = ease(clamp(s.p - 4, 0, 1));
     if (qb > 0) {
-      const ax = cx + 3 * D + gap, bx = Math.max(ax + .1, lerp(ax, cx + PI * D - gap * .4, qb));
-      stick(ctx, ax, rowY, bx, C.yellow, sw);
-      if (qb >= 1 && !o.thumb) txt(ctx, '+ a bit', cx + 3.07 * D, rowY + sw + 13, { size: fs, w: 600 });
+      stick(ctx, cx + 3 * D, rowY, lerp(cx + 3 * D + .1, cx + PI * D, qb), C.yellow, sw, 'butt');
+      if (qb >= 1) { ticks.push(cx + PI * D); if (!o.thumb) txt(ctx, '+ a bit', cx + 3.07 * D, rowY + sw + 13, { size: fs, w: 600 }); }
     }
+    ctx.strokeStyle = C.ink; ctx.lineWidth = o.thumb ? 1 : 1.5; ctx.lineCap = 'butt';
+    for (const x of ticks) line(ctx, x, tickTop, x, tickBot);
   }
 });
 
@@ -364,7 +380,7 @@ M.push({
 const SIDES = [4, 5, 6, 8, 10, 12, 16, 24, 32, 48, 64, 96];
 M.push({
   id: 'sides', title: 'Many-sided shapes',
-  watch: 'Trap the circle between two shapes, one inside and one outside. Then keep adding sides.',
+  watch: 'Trap the circle between two shapes, one inside and one outside. Add sides, and the magnifying glass zooms in as the gap closes.',
   extra: { type: 'range', label: 'Sides', min: 4, max: 96, step: 1 },
   make() { return { n: 4, hold: 0 }; }, thumb() { return { n: 6, hold: 0 }; },
   getExtra(s) { return s.n; }, setExtra(s, v) { s.n = v; s.hold = 0; },
@@ -379,8 +395,19 @@ M.push({
   },
   draw(ctx, w, h, s, o) {
     const m = o.thumb ? 4 : 20, foot = o.thumb ? 0 : 36, fs = fsOf(w), n = s.n;
-    const R = Math.min(w - 2 * m, h - 2 * m - foot) / 2.5, cx = w / 2, cy = (h - foot) / 2 + (o.thumb ? 0 : 4);
-    const Ro = R / Math.cos(PI / n);
+    let R = Math.min(w - 2 * m, h - 2 * m - foot) / 2.5, cx = w / 2, cy = (h - foot) / 2 + (o.thumb ? 0 : 4);
+    /* make room for the magnifying glass: beside the figure on a wide stage, in the lower-left corner on a narrow one */
+    let lr = 0, lx = 0, ly = 0;
+    if (!o.thumb) {
+      lr = clamp(Math.min(h * .24, w * .17), 40, 100);
+      const hx = lr * .3, gap = 26, Rw = Math.min((w - 2 * m - 2 * lr - hx - gap) / 2.5, R);
+      lx = m + hx + lr; ly = h - foot - 8 - hx - lr;
+      let Rn = R, nx = 0, ny = 0;
+      for (; Rn > 30; Rn -= 2) { nx = w - m - 1.25 * Rn; ny = m + 1.25 * Rn; if (Math.hypot(nx - lx, ny - ly) >= 1.2 * Rn + lr + 6) break; }
+      if (Rw >= Rn - 1) { R = Rw; const gx = (w - (hx + 2 * lr + gap + 2.5 * R)) / 2; lx = gx + hx + lr; ly = cy; cx = gx + hx + 2 * lr + gap + 1.25 * R; }
+      else { R = Rn; cx = nx; cy = ny; }
+    }
+    const th = PI / n, Ro = R / Math.cos(th);
     poly(ctx, cx, cy, Ro, n, PI / 2 + PI / n); ctx.fillStyle = C.blue; ctx.globalAlpha = .13; ctx.fill(); ctx.globalAlpha = 1;
     ctx.fillStyle = C.surface; ctx.beginPath(); ctx.arc(cx, cy, R, 0, TAU); ctx.fill();
     poly(ctx, cx, cy, R, n, PI / 2); ctx.fillStyle = C.red; ctx.globalAlpha = .14; ctx.fill(); ctx.globalAlpha = 1;
@@ -389,11 +416,37 @@ M.push({
     poly(ctx, cx, cy, Ro, n, PI / 2 + PI / n); ctx.strokeStyle = C.blue; ctx.stroke();
     poly(ctx, cx, cy, R, n, PI / 2); ctx.strokeStyle = C.red; ctx.stroke();
     if (o.thumb) return;
-    const y = h - m - 6;
+    const y = h - m - 6, mid = w / 2;
     txt(ctx, `${n} sides`, m, m + 6, { size: fs + 3, align: 'left', w: 600 });
-    txt(ctx, 'inside ' + (n * Math.sin(PI / n)).toFixed(4), cx - 34, y, { size: fs + 1, color: C.red, align: 'right', w: 600 });
-    txt(ctx, '< π <', cx, y, { size: fs + 2, w: 600 });
-    txt(ctx, (n * Math.tan(PI / n)).toFixed(4) + ' outside', cx + 34, y, { size: fs + 1, color: C.blue, align: 'left', w: 600 });
+    txt(ctx, 'inside ' + (n * Math.sin(th)).toFixed(4), mid - 34, y, { size: fs + 1, color: C.red, align: 'right', w: 600 });
+    txt(ctx, '< π <', mid, y, { size: fs + 2, w: 600 });
+    txt(ctx, (n * Math.tan(th)).toFixed(4) + ' outside', mid + 34, y, { size: fs + 1, color: C.blue, align: 'left', w: 600 });
+
+    /* Magnifying glass. It sits on the circle at the outside corner nearest the left edge, where the gaps are widest.
+       The zoom steps up (1, 2, 5, 10 ...) so the gap between the outside corner and the circle stays visible. */
+    const a = PI / 2 + th + Math.ceil(n / 4 - 1) * 2 * th, px = cx + R * Math.cos(a), py = cy + R * Math.sin(a);
+    let Z = 1; for (const z of [2, 5, 10, 20, 50, 100, 200, 500, 1000]) if ((Ro - R) * z <= lr * .45) Z = z;
+    const TX = x => lx + (x - px) * Z, TY = v => ly + (v - py) * Z;
+    const rs = clamp(lr / Z, 4, R * .35), dx = lx - px, dy = ly - py, dl = Math.hypot(dx, dy) || 1;
+    ctx.strokeStyle = C.ink; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(px, py, rs, 0, TAU); ctx.stroke();
+    if (dl > rs + lr + 4) { ctx.strokeStyle = C.soft; line(ctx, px + dx / dl * rs, py + dy / dl * rs, lx - dx / dl * lr, ly - dy / dl * lr); }
+    ctx.save(); ctx.beginPath(); ctx.arc(lx, ly, lr, 0, TAU); ctx.clip();
+    ctx.fillStyle = C.surface; ctx.fillRect(lx - lr, ly - lr, 2 * lr, 2 * lr);
+    /* everything inside the glass is recomputed at full precision, not scaled up from the small drawing */
+    const zpoly = (rad, a0) => { ctx.beginPath(); for (let i = 0; i < n; i++) { const t = a0 + i * 2 * th, x = TX(cx + rad * Math.cos(t)), v = TY(cy + rad * Math.sin(t)); i ? ctx.lineTo(x, v) : ctx.moveTo(x, v); } ctx.closePath(); };
+    const rho = lr / (R * Z), full = rho >= .9, beta = full ? PI : Math.asin(rho) * 1.15;
+    const zarc = () => { ctx.beginPath(); for (let i = 0; i <= 72; i++) { const t = a - beta + 2 * beta * i / 72, x = TX(cx + R * Math.cos(t)), v = TY(cy + R * Math.sin(t)); i ? ctx.lineTo(x, v) : ctx.moveTo(x, v); } };
+    zpoly(Ro, PI / 2 + th); ctx.fillStyle = C.blue; ctx.globalAlpha = .13; ctx.fill(); ctx.globalAlpha = 1;
+    zarc(); if (!full) ctx.lineTo(TX(cx), TY(cy)); ctx.closePath(); ctx.fillStyle = C.surface; ctx.fill();
+    zpoly(R, PI / 2); ctx.fillStyle = C.red; ctx.globalAlpha = .14; ctx.fill(); ctx.globalAlpha = 1;
+    ctx.lineJoin = 'round'; ctx.lineCap = 'butt';
+    zarc(); ctx.strokeStyle = C.ink; ctx.lineWidth = 3.5; ctx.stroke();
+    ctx.lineWidth = 2.2; zpoly(Ro, PI / 2 + th); ctx.strokeStyle = C.blue; ctx.stroke(); zpoly(R, PI / 2); ctx.strokeStyle = C.red; ctx.stroke();
+    ctx.restore();
+    ctx.strokeStyle = C.ink; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(lx, ly, lr, 0, TAU); ctx.stroke();
+    const hk = Math.SQRT1_2; ctx.lineWidth = Math.max(6, lr * .09); ctx.lineCap = 'round';
+    line(ctx, lx - hk * (lr + 4), ly + hk * (lr + 4), lx - hk * lr * 1.42, ly + hk * lr * 1.42);
+    txt(ctx, 'zoom ' + Z + '×', lx + lr * .3, ly + lr + 15, { size: fs + 1, w: 600 });
   }
 });
 
