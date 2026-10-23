@@ -774,4 +774,13 @@ start();
 })();
 </script>
 </body>
+<!-- Home button (captcraig.net) -->
+<a href="/" id="cc-home" aria-label="Back to home page">⌂ Home</a>
+<style>
+#cc-home{position:absolute;top:calc(26px + env(safe-area-inset-top));right:calc(24px + env(safe-area-inset-right));
+z-index:9999;padding:6px 14px;border-radius:999px;font:600 15px/1.2 system-ui,-apple-system,sans-serif;
+text-decoration:none;color:#14273e;background:#fff;border:1px solid rgba(20,39,62,.3);
+opacity:.85;transition:opacity .15s,box-shadow .15s}
+#cc-home:hover,#cc-home:focus-visible{opacity:1;box-shadow:0 2px 8px rgba(20,39,62,.2)}
+</style>
 </html>
